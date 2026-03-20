@@ -47,15 +47,23 @@ def get_youtube_service():
     """Authenticate and return YouTube API service."""
     creds = None
 
-    # Load existing token if available
-    if os.path.exists(TOKEN_FILE):
+    # Check for credentials in environment variables (for Render/Cloud)
+    yt_token_env = os.environ.get("YOUTUBE_TOKEN_JSON")
+    yt_secrets_env = os.environ.get("YOUTUBE_CLIENT_SECRETS_JSON")
+
+    # Load existing token from file or env
+    if yt_token_env:
+        try:
+            creds = Credentials.from_authorized_user_info(json.loads(yt_token_env), SCOPES)
+        except Exception as e:
+            print(f"  Env Token load failed: {e}")
+    elif os.path.exists(TOKEN_FILE):
         try:
             creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
         except Exception as e:
-            print(f"  Token load failed: {e}, will re-authenticate")
-            creds = None
+            print(f"  File Token load failed: {e}")
 
-    # Refresh or re-authenticate if needed
+    # Refresh or re-authenticate
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             print("  Refreshing access token...")
@@ -66,21 +74,42 @@ def get_youtube_service():
                 creds = None
 
         if not creds:
-            if not os.path.exists(CREDENTIALS_FILE):
-                print(f"\nERROR: Client secrets file not found: {CREDENTIALS_FILE}")
-                print("Download it from Google Cloud Console > APIs > Credentials")
+            # If no token and no client secrets in env, try local client secrets for interactive flow
+            if not yt_secrets_env and os.path.exists(CREDENTIALS_FILE):
+                print("  Opening OAuth2 flow (first time setup)...")
+                flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+                # Use local server flow for Windows/Desktop with FIXED port
+                creds = flow.run_local_server(port=8080)
+            elif yt_secrets_env:
+                # Headless authentication for server environments
+                print("  Attempting headless OAuth2 flow...")
+                try:
+                    client_config = json.loads(yt_secrets_env)
+                    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+                    # This will raise an error if no browser is available, which is expected in headless
+                    # For headless, a pre-generated token is usually preferred.
+                    # This path is mostly for initial setup or if a custom headless auth flow is implemented.
+                    # For now, we'll assume if yt_secrets_env is present, a token should also be present.
+                    print("  Headless authentication requires a pre-generated token (YOUTUBE_TOKEN_JSON).")
+                    print("  Please generate token locally and provide via YOUTUBE_TOKEN_JSON.")
+                    sys.exit(1)
+                except Exception as e:
+                    print(f"  Headless client secrets load failed: {e}")
+                    sys.exit(1)
+            else:
+                print("\nERROR: No valid YouTube API credentials found!")
+                print("Please provide 'youtube_token.json' file or 'YOUTUBE_TOKEN_JSON' environment variable.")
+                print("To generate on local PC: run 'python upload.py --video test.mp4' once.")
                 sys.exit(1)
 
-            print("  Opening OAuth2 flow (first time setup)...")
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            # Use local server flow for Windows/Desktop with FIXED port
-            creds = flow.run_local_server(port=8080)
-
-        # Save credentials for next run
-        with open(TOKEN_FILE, "w") as f:
-            f.write(creds.to_json())
-        print("  Credentials saved")
-
+        # Sync back to file if not using environment variables for token
+        if not yt_token_env and creds:
+            with open(TOKEN_FILE, "w") as f:
+                f.write(creds.to_json())
+            print("  Credentials saved to file")
+        else:
+            print("  Using credentials from environment variable")
+    
     return build("youtube", "v3", credentials=creds)
 
 
@@ -155,7 +184,7 @@ def upload_video(
                     print(f"\r  Uploading: [{bar}] {progress}%", end="", flush=True)
 
             print(f"\n  Upload complete!")
-            video_id = response.get("id")
+            video_id = response.get("id") if response else "Unknown"
             video_url = f"https://www.youtube.com/watch?v={video_id}"
             print(f"  Video ID: {video_id}")
             print(f"  URL: {video_url}")
