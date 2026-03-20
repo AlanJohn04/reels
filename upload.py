@@ -30,16 +30,24 @@ except ImportError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-# Get the directory where the script is located
+
+# ── Path Resolution (supports Render Secret Files + local dev) ────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CREDENTIALS_FILE = os.path.join(BASE_DIR, "client_secrets.json")
-TOKEN_FILE = os.path.join(BASE_DIR, "youtube_token.json")
+# Render.com places Secret Files at /etc/secrets/<filename>
+# Fall back to local file in current directory for local dev
+def _resolve_secret(filename):
+    render_path = f"/etc/secrets/{filename}"
+    if os.path.exists(render_path):
+        return render_path
+    return os.path.join(BASE_DIR, filename)
+
+CREDENTIALS_FILE = _resolve_secret("client_secrets.json")
+TOKEN_FILE = _resolve_secret("youtube_token.json")
 
 # Retry configuration for network issues
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
-
 
 STATE_FILE = os.path.join(BASE_DIR, "orv_state.json")
 
